@@ -1,7 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -150,6 +150,20 @@ struct UpsertMcpJsonInput {
 struct DeleteMcpInput {
     source_id: String,
     id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncAgentsInput {
+    source_id: String,
+    target_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncResult {
+    added: usize,
+    skipped: usize,
 }
 
 fn resolve_home() -> Result<PathBuf, String> {
@@ -546,6 +560,37 @@ fn read_skills(source: &SourceConfig) -> Vec<SkillItem> {
 
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     skills
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|err| format!("Failed to create {}: {}", dest.display(), err))?;
+    let entries = fs::read_dir(src)
+        .map_err(|err| format!("Failed to read {}: {}", src.display(), err))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("Failed to read entry: {}", err))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("Failed to read file type: {}", err))?;
+        let source_path = entry.path();
+        let target_path = dest.join(entry.file_name());
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path).map_err(|err| {
+                format!(
+                    "Failed to copy {} to {}: {}",
+                    source_path.display(),
+                    target_path.display(),
+                    err
+                )
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn find_core_file(skill_dir: &Path, core_files: &[&str]) -> Option<(PathBuf, String)> {
@@ -1785,6 +1830,54 @@ fn delete_skill(payload: DeleteSkillInput) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn sync_skills_from_agent(payload: SyncAgentsInput) -> Result<SyncResult, String> {
+    if payload.source_id == payload.target_id {
+        return Err("Source and target must be different".to_string());
+    }
+    let home = resolve_home()?;
+    let sources = source_configs(&home);
+    let source = sources
+        .iter()
+        .find(|source| source.id == payload.source_id)
+        .ok_or_else(|| "Unknown skill source".to_string())?;
+    let target = sources
+        .iter()
+        .find(|source| source.id == payload.target_id)
+        .ok_or_else(|| "Unknown target source".to_string())?;
+
+    if !source.root.is_dir() {
+        return Err("Source skills directory missing".to_string());
+    }
+    fs::create_dir_all(&target.root)
+        .map_err(|err| format!("Failed to create {}: {}", target.root.display(), err))?;
+
+    let source_root = fs::canonicalize(&source.root)
+        .map_err(|err| format!("Failed to resolve source root: {}", err))?;
+    let skills = read_skills(source);
+    let mut added = 0;
+    let mut skipped = 0;
+
+    for skill in skills {
+        let skill_dir = source.root.join(&skill.id);
+        let skill_canon = fs::canonicalize(&skill_dir)
+            .map_err(|err| format!("Failed to resolve skill: {}", err))?;
+        if !skill_canon.starts_with(&source_root) {
+            return Err("Refusing to copy outside agent root".to_string());
+        }
+
+        let target_dir = target.root.join(&skill.id);
+        if target_dir.exists() {
+            skipped += 1;
+            continue;
+        }
+        copy_dir_recursive(&skill_dir, &target_dir)?;
+        added += 1;
+    }
+
+    Ok(SyncResult { added, skipped })
+}
+
+#[tauri::command]
 fn list_mcp_sources() -> Result<Vec<McpSource>, String> {
     let home = resolve_home()?;
     let configs = mcp_source_configs(&home);
@@ -1813,6 +1906,54 @@ fn list_mcp_sources() -> Result<Vec<McpSource>, String> {
     }
 
     Ok(response)
+}
+
+#[tauri::command]
+fn sync_mcp_from_agent(payload: SyncAgentsInput) -> Result<SyncResult, String> {
+    if payload.source_id == payload.target_id {
+        return Err("Source and target must be different".to_string());
+    }
+    let home = resolve_home()?;
+    let configs = mcp_source_configs(&home);
+    let source = configs
+        .iter()
+        .find(|config| config.id == payload.source_id)
+        .ok_or_else(|| "Unknown MCP source".to_string())?;
+    let target = configs
+        .iter()
+        .find(|config| config.id == payload.target_id)
+        .ok_or_else(|| "Unknown MCP target".to_string())?;
+
+    let source_path = resolve_read_path(source);
+    let source_servers = read_mcp_servers(source, &source_path)?;
+
+    let target_path = resolve_read_path(target);
+    let target_servers = if target_path.exists() {
+        read_mcp_servers(target, &target_path)?
+    } else {
+        Vec::new()
+    };
+    let existing_ids: HashSet<String> =
+        target_servers.into_iter().map(|server| server.id).collect();
+
+    let mut added = 0;
+    let mut skipped = 0;
+    let mut to_insert = HashMap::new();
+
+    for server in source_servers {
+        if existing_ids.contains(&server.id) {
+            skipped += 1;
+            continue;
+        }
+        to_insert.insert(server.id.clone(), server.config);
+        added += 1;
+    }
+
+    if !to_insert.is_empty() {
+        upsert_mcp_servers(target, to_insert)?;
+    }
+
+    Ok(SyncResult { added, skipped })
 }
 
 #[tauri::command]
@@ -1850,7 +1991,9 @@ pub fn run() {
             install_skill_from_url,
             sync_skill_from_url,
             delete_skill,
+            sync_skills_from_agent,
             list_mcp_sources,
+            sync_mcp_from_agent,
             upsert_mcp_server_json,
             delete_mcp_server
         ])

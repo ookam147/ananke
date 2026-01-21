@@ -47,6 +47,11 @@ type McpSource = {
   servers: McpServer[];
 };
 
+type SyncResult = {
+  added: number;
+  skipped: number;
+};
+
 type ToastTone = "success" | "error" | "info";
 
 type ToastState = {
@@ -99,6 +104,16 @@ const translations = {
     skillContent: "SKILL.md content",
     syncLatest: "Sync latest",
     syncing: "Syncing...",
+    syncOtherSkills: "Sync other agent",
+    syncOtherMcp: "Sync other MCP",
+    sourceAgent: "Source agent",
+    syncSkillsTitle: "Sync skills",
+    syncMcpTitle: "Sync MCP servers",
+    syncSkillsDescription:
+      "Sync all skills from the source agent into the target agent. Duplicates are skipped automatically.",
+    syncMcpDescription:
+      "Sync all MCP servers from the source agent into the target agent. Duplicates are skipped automatically.",
+    syncNow: "Sync now",
     deleteSkill: "Delete skill",
     mcpServers: "MCP Servers",
     selectAgent: "Select an agent",
@@ -145,6 +160,7 @@ const translations = {
     installFailed: "Install failed: {error}",
     skillSynced: "Skill synced.",
     syncFailed: "Sync failed: {error}",
+    skillsSyncedFromAgent: "Skills synced from {source}. Added {count}.",
     skillDeleted: "Skill deleted.",
     deleteFailed: "Delete failed: {error}",
     agentsRefreshed: "Agents refreshed.",
@@ -155,6 +171,7 @@ const translations = {
     mcpSaved: "MCP server saved.",
     saveFailed: "Save failed: {error}",
     mcpDeleted: "MCP server deleted.",
+    mcpSyncedFromAgent: "MCP servers synced from {source}. Added {count}.",
     notTracked: "Not tracked",
     treeDir: "DIR",
     treeLink: "LINK",
@@ -195,6 +212,14 @@ const translations = {
     skillContent: "SKILL.md 内容",
     syncLatest: "同步最新",
     syncing: "同步中...",
+    syncOtherSkills: "同步其他Agent",
+    syncOtherMcp: "同步其他MCP服务",
+    sourceAgent: "来源Agent",
+    syncSkillsTitle: "同步Skills",
+    syncMcpTitle: "同步MCP服务",
+    syncSkillsDescription: "将来源Agent的Skills全部同步到目标Agent中，自动去重。",
+    syncMcpDescription: "将来源Agent的MCP服务全部同步到目标Agent中，自动去重。",
+    syncNow: "同步",
     deleteSkill: "删除Skill",
     mcpServers: "MCP 服务",
     selectAgent: "选择Agent",
@@ -241,6 +266,7 @@ const translations = {
     installFailed: "安装失败：{error}",
     skillSynced: "Skill已同步。",
     syncFailed: "同步失败：{error}",
+    skillsSyncedFromAgent: "已从 {source} 同步Skills，新增 {count} 个。",
     skillDeleted: "Skill已删除。",
     deleteFailed: "删除失败：{error}",
     agentsRefreshed: "Agent列表已刷新。",
@@ -251,6 +277,7 @@ const translations = {
     mcpSaved: "MCP 服务已保存。",
     saveFailed: "保存失败：{error}",
     mcpDeleted: "MCP 服务已删除。",
+    mcpSyncedFromAgent: "已从 {source} 同步MCP服务，新增 {count} 个。",
     notTracked: "未记录",
     treeDir: "目录",
     treeLink: "链接",
@@ -349,7 +376,7 @@ const buildMcpJson = (server: McpServer) =>
 function App() {
   const [view, setView] = useState<"skills" | "mcp">("skills");
   const [sources, setSources] = useState<SkillSource[]>([]);
-  const [selectedSource, setSelectedSource] = useState("all");
+  const [selectedSource, setSelectedSource] = useState("");
   const [selectedSkillKey, setSelectedSkillKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -358,6 +385,10 @@ function App() {
   const [skillForm, setSkillForm] = useState<SkillForm>(defaultSkillForm);
   const [deleteIntent, setDeleteIntent] = useState<DeleteIntent | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
+  const [showSyncSkills, setShowSyncSkills] = useState(false);
+  const [syncSkillsTargetId, setSyncSkillsTargetId] = useState("");
+  const [syncSkillsSourceId, setSyncSkillsSourceId] = useState("");
+  const [syncSkillsLoading, setSyncSkillsLoading] = useState(false);
   const toastTimer = useRef<number | null>(null);
 
   const [skillTree, setSkillTree] = useState<SkillTreeNode | null>(null);
@@ -371,6 +402,10 @@ function App() {
   const [selectedMcpId, setSelectedMcpId] = useState<string | null>(null);
   const [showAddMcp, setShowAddMcp] = useState(false);
   const [mcpForm, setMcpForm] = useState<McpForm>(defaultMcpForm);
+  const [showSyncMcp, setShowSyncMcp] = useState(false);
+  const [syncMcpTargetId, setSyncMcpTargetId] = useState("");
+  const [syncMcpSourceId, setSyncMcpSourceId] = useState("");
+  const [syncMcpLoading, setSyncMcpLoading] = useState(false);
   const [locale, setLocale] = useState<Locale>(() => resolveLocale());
 
   useEffect(() => {
@@ -446,9 +481,9 @@ function App() {
   }, [sources, skillForm.sourceId]);
 
   useEffect(() => {
-    if (selectedSource === "all") return;
+    if (sources.length === 0) return;
     if (!sources.some((source) => source.id === selectedSource)) {
-      setSelectedSource("all");
+      setSelectedSource(sources[0].id);
     }
   }, [sources, selectedSource]);
 
@@ -470,9 +505,8 @@ function App() {
   }, [sources]);
 
   const visibleSkills = useMemo(() => {
-    return selectedSource === "all"
-      ? allSkills
-      : allSkills.filter((skill) => skill.sourceId === selectedSource);
+    if (!selectedSource) return [];
+    return allSkills.filter((skill) => skill.sourceId === selectedSource);
   }, [allSkills, selectedSource]);
 
   const selectedSkill = useMemo(() => {
@@ -581,7 +615,6 @@ function App() {
 
   const handleOpenAddSkill = () => {
     const preferred =
-      selectedSource !== "all" &&
       sources.some((source) => source.id === selectedSource)
         ? selectedSource
         : sources[0]?.id;
@@ -638,6 +671,44 @@ function App() {
     }
   };
 
+  const handleOpenSyncSkills = () => {
+    if (!selectedSource) return;
+    const options = sources.filter((source) => source.id !== selectedSource);
+    if (options.length === 0) return;
+    setSyncSkillsTargetId(selectedSource);
+    setSyncSkillsSourceId(options[0].id);
+    setShowSyncSkills(true);
+  };
+
+  const handleSyncSkillsFromAgent = async () => {
+    if (!syncSkillsTargetId || !syncSkillsSourceId || syncSkillsLoading) return;
+    const sourceLabel =
+      sources.find((source) => source.id === syncSkillsSourceId)?.label ||
+      t("unknownAgent");
+    try {
+      setSyncSkillsLoading(true);
+      const result = await invoke<SyncResult>("sync_skills_from_agent", {
+        payload: {
+          sourceId: syncSkillsSourceId,
+          targetId: syncSkillsTargetId,
+        },
+      });
+      await loadSources();
+      setShowSyncSkills(false);
+      showToast(
+        t("skillsSyncedFromAgent", {
+          source: sourceLabel,
+          count: result.added,
+        }),
+        "success",
+      );
+    } catch (err) {
+      showToast(t("syncFailed", { error: String(err) }), "error");
+    } finally {
+      setSyncSkillsLoading(false);
+    }
+  };
+
   const handleRequestDeleteSkill = () => {
     if (!selectedSkill) return;
     setDeleteIntent({
@@ -680,6 +751,46 @@ function App() {
       json: defaultMcpJson,
     });
     setShowAddMcp(true);
+  };
+
+  const handleOpenSyncMcp = () => {
+    if (!activeMcpSource) return;
+    const options = mcpSources.filter(
+      (source) => source.id !== activeMcpSource.id,
+    );
+    if (options.length === 0) return;
+    setSyncMcpTargetId(activeMcpSource.id);
+    setSyncMcpSourceId(options[0].id);
+    setShowSyncMcp(true);
+  };
+
+  const handleSyncMcpFromAgent = async () => {
+    if (!syncMcpTargetId || !syncMcpSourceId || syncMcpLoading) return;
+    const sourceLabel =
+      mcpSources.find((source) => source.id === syncMcpSourceId)?.label ||
+      t("unknownAgent");
+    try {
+      setSyncMcpLoading(true);
+      const result = await invoke<SyncResult>("sync_mcp_from_agent", {
+        payload: {
+          sourceId: syncMcpSourceId,
+          targetId: syncMcpTargetId,
+        },
+      });
+      await loadMcp();
+      setShowSyncMcp(false);
+      showToast(
+        t("mcpSyncedFromAgent", {
+          source: sourceLabel,
+          count: result.added,
+        }),
+        "success",
+      );
+    } catch (err) {
+      showToast(t("syncFailed", { error: String(err) }), "error");
+    } finally {
+      setSyncMcpLoading(false);
+    }
   };
 
   const handleSaveMcp = async () => {
@@ -764,11 +875,6 @@ function App() {
     setShowAddMcp(true);
   };
 
-  const sourceCount = (sourceId: string) =>
-    sourceId === "all"
-      ? totalSkills
-      : sources.find((source) => source.id === sourceId)?.skills.length || 0;
-
   const renderTreeNode = (node: SkillTreeNode) => {
     return (
       <div key={node.path} className={`tree-node ${node.kind}`}>
@@ -788,9 +894,23 @@ function App() {
   const selectedMcpLabel = activeMcpSource?.label || "";
   const selectedMcpMetaLabel = selectedMcpLabel || t("unselected");
   const selectedSourceLabel =
-    selectedSource === "all"
-      ? t("allAgentsLabel")
-      : sources.find((source) => source.id === selectedSource)?.label || "";
+    sources.find((source) => source.id === selectedSource)?.label ||
+    t("selectAgent");
+  const syncSkillsTargetLabel =
+    sources.find((source) => source.id === syncSkillsTargetId)?.label ||
+    t("selectAgent");
+  const syncSkillsSourceOptions = sources.filter(
+    (source) => source.id !== syncSkillsTargetId,
+  );
+  const syncMcpTargetLabel =
+    mcpSources.find((source) => source.id === syncMcpTargetId)?.label ||
+    t("selectAgent");
+  const syncMcpSourceOptions = mcpSources.filter(
+    (source) => source.id !== syncMcpTargetId,
+  );
+  const canSyncSkills =
+    sources.length > 1 && sources.some((source) => source.id === selectedSource);
+  const canSyncMcp = mcpSources.length > 1 && Boolean(activeMcpSource);
   const currentYear = new Date().getFullYear();
 
   return (
@@ -900,25 +1020,6 @@ function App() {
               <span className="panel-sub">{t("pickScope")}</span>
             </div>
 
-            <button
-              className={`source-card ${
-                selectedSource === "all" ? "active" : ""
-              }`}
-              style={
-                {
-                  "--accent": sourcePalette.all.accent,
-                  "--accent-soft": sourcePalette.all.soft,
-                } as CSSProperties
-              }
-              onClick={() => setSelectedSource("all")}
-            >
-              <div className="source-title">{t("allAgents")}</div>
-              <div className="source-meta">
-                <span>{t("countSkills", { count: sourceCount("all") })}</span>
-                <span className="status-pill">{t("unifiedView")}</span>
-              </div>
-            </button>
-
             <div className="source-list">
               {sources.map((source) => {
                 const palette = paletteForSource(source.id);
@@ -953,11 +1054,20 @@ function App() {
           </aside>
 
           <section className="panel skills">
-            <div className="panel-header">
-              <h2>{t("installedSkills")}</h2>
-              <span className="panel-sub">
-                {selectedSourceLabel}
-              </span>
+            <div className="panel-header with-actions">
+              <div className="panel-heading">
+                <h2>{t("installedSkills")}</h2>
+                <span className="panel-sub">{selectedSourceLabel}</span>
+              </div>
+              <div className="panel-actions">
+                <button
+                  className="btn btn-ghost btn-sync"
+                  onClick={handleOpenSyncSkills}
+                  disabled={!canSyncSkills}
+                >
+                  {t("syncOtherSkills")}
+                </button>
+              </div>
             </div>
 
             {isLoading ? (
@@ -1146,11 +1256,22 @@ function App() {
           </aside>
 
           <section className="panel mcp-list">
-            <div className="panel-header">
-              <h2>{t("mcpServers")}</h2>
-              <span className="panel-sub">
-                {activeMcpSource?.label || t("selectAgent")}
-              </span>
+            <div className="panel-header with-actions">
+              <div className="panel-heading">
+                <h2>{t("mcpServers")}</h2>
+                <span className="panel-sub">
+                  {activeMcpSource?.label || t("selectAgent")}
+                </span>
+              </div>
+              <div className="panel-actions">
+                <button
+                  className="btn btn-ghost btn-sync"
+                  onClick={handleOpenSyncMcp}
+                  disabled={!canSyncMcp}
+                >
+                  {t("syncOtherMcp")}
+                </button>
+              </div>
             </div>
 
             {activeMcpSource && (
@@ -1312,6 +1433,65 @@ function App() {
         </div>
       )}
 
+      {showSyncSkills && (
+        <div className="overlay" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-header">
+              <div>
+                <h3>{t("syncSkillsTitle")}</h3>
+                <p>{t("syncSkillsDescription")}</p>
+              </div>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowSyncSkills(false)}
+              >
+                {t("close")}
+              </button>
+            </div>
+
+            <div className="modal-grid">
+              <label>
+                <span>{t("targetAgent")}</span>
+                <input value={syncSkillsTargetLabel} readOnly />
+              </label>
+              <label>
+                <span>{t("sourceAgent")}</span>
+                <select
+                  value={syncSkillsSourceId}
+                  onChange={(event) =>
+                    setSyncSkillsSourceId(event.target.value)
+                  }
+                  disabled={syncSkillsSourceOptions.length === 0}
+                >
+                  {syncSkillsSourceOptions.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn btn-primary sync-button"
+                onClick={handleSyncSkillsFromAgent}
+                disabled={
+                  syncSkillsLoading ||
+                  !syncSkillsSourceId ||
+                  !syncSkillsTargetId
+                }
+              >
+                {syncSkillsLoading ? t("syncing") : t("syncNow")}
+                {syncSkillsLoading && (
+                  <span className="sync-spinner" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteIntent && (
         <div className="overlay" role="dialog" aria-modal="true">
           <div className="modal">
@@ -1414,6 +1594,65 @@ function App() {
             <div className="modal-footer">
               <button className="btn btn-primary" onClick={handleSaveMcp}>
                 {t("saveMcp")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSyncMcp && (
+        <div className="overlay" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-header">
+              <div>
+                <h3>{t("syncMcpTitle")}</h3>
+                <p>{t("syncMcpDescription")}</p>
+              </div>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowSyncMcp(false)}
+              >
+                {t("close")}
+              </button>
+            </div>
+
+            <div className="modal-grid">
+              <label>
+                <span>{t("targetAgent")}</span>
+                <input value={syncMcpTargetLabel} readOnly />
+              </label>
+              <label>
+                <span>{t("sourceAgent")}</span>
+                <select
+                  value={syncMcpSourceId}
+                  onChange={(event) =>
+                    setSyncMcpSourceId(event.target.value)
+                  }
+                  disabled={syncMcpSourceOptions.length === 0}
+                >
+                  {syncMcpSourceOptions.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn btn-primary sync-button"
+                onClick={handleSyncMcpFromAgent}
+                disabled={
+                  syncMcpLoading ||
+                  !syncMcpSourceId ||
+                  !syncMcpTargetId
+                }
+              >
+                {syncMcpLoading ? t("syncing") : t("syncNow")}
+                {syncMcpLoading && (
+                  <span className="sync-spinner" aria-hidden="true" />
+                )}
               </button>
             </div>
           </div>

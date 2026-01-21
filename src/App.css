@@ -224,6 +224,22 @@ body::before {
   gap: 12px;
 }
 
+.panel-header.with-actions {
+  align-items: center;
+}
+
+.panel-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .panel-header h2 {
   margin: 0;
   font-family: var(--display-font);
@@ -700,10 +716,31 @@ textarea {
   color: #8f3a26;
 }
 
+.btn-sync {
+  border-color: rgba(43, 93, 168, 0.4);
+  color: #2b5da8;
+  background: rgba(43, 93, 168, 0.08);
+}
+
 .btn-external .external-icon {
   width: 16px;
   height: 16px;
   stroke: #d95a3d;
+}
+
+.sync-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
 }
 
 .overlay {
@@ -832,6 +869,15 @@ textarea {
   to {
     opacity: 1;
     transform: translateX(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

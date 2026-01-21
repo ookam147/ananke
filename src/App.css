@@ -140,8 +140,11 @@ body::before {
   width: auto;
   min-width: 80px;
   padding: 0;
+  min-height: 0;
+  height: 18px;
   border: none;
   background: transparent;
+  background-image: none;
   font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--ink);
@@ -611,6 +614,23 @@ select {
   color: var(--ink);
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  line-height: 1.2;
+}
+
+input,
+select {
+  min-height: 38px;
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%235f554b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
 }
 
 input:focus,

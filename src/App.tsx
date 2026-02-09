@@ -181,7 +181,7 @@ const translations = {
     chinese: "中文",
   },
   zh: {
-    tagline: "Skill 与 MCP 的可视化管理工具",
+    tagline: "Skill 与 MCP 的可视化管理",
     viewSkills: "Skill",
     viewMcp: "MCP",
     installSkill: "安装Skill",

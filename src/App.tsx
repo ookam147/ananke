@@ -62,6 +62,8 @@ type ToastState = {
 type SkillForm = {
   sourceId: string;
   url: string;
+  repoType: "public" | "private";
+  token: string;
 };
 
 type McpForm = {
@@ -176,6 +178,11 @@ const translations = {
     treeDir: "DIR",
     treeLink: "LINK",
     treeFile: "FILE",
+    repoType: "Repository Type",
+    public: "Public",
+    private: "Private",
+    token: "Access Token",
+    tokenPlaceholder: "ghp_...",
     language: "Language",
     english: "English",
     chinese: "中文",
@@ -282,6 +289,11 @@ const translations = {
     treeDir: "目录",
     treeLink: "链接",
     treeFile: "文件",
+    repoType: "仓库类型",
+    public: "公开",
+    private: "私有",
+    token: "访问令牌",
+    tokenPlaceholder: "ghp_...",
     language: "语言",
     english: "English",
     chinese: "中文",
@@ -302,17 +314,17 @@ const resolveLocale = (): Locale => {
 
 type DeleteIntent =
   | {
-      kind: "skill";
-      sourceId: string;
-      skillId: string;
-      name: string;
-    }
+    kind: "skill";
+    sourceId: string;
+    skillId: string;
+    name: string;
+  }
   | {
-      kind: "mcp";
-      sourceId: string;
-      id: string;
-      name: string;
-    };
+    kind: "mcp";
+    sourceId: string;
+    id: string;
+    name: string;
+  };
 
 type SkillWithSource = Skill & {
   sourceLabel: string;
@@ -348,6 +360,8 @@ const paletteForSource = (sourceId: string) => {
 const defaultSkillForm: SkillForm = {
   sourceId: "codex-user",
   url: "",
+  repoType: "public",
+  token: "",
 };
 
 const defaultMcpJson = `{
@@ -638,6 +652,10 @@ function App() {
         payload: {
           sourceId: skillForm.sourceId,
           url: skillForm.url.trim(),
+          token:
+            skillForm.repoType === "private" && skillForm.token.trim()
+              ? skillForm.token.trim()
+              : null,
         },
       });
       await loadSources();
@@ -1027,9 +1045,8 @@ function App() {
                 return (
                   <button
                     key={source.id}
-                    className={`source-card ${
-                      selectedSource === source.id ? "active" : ""
-                    }`}
+                    className={`source-card ${selectedSource === source.id ? "active" : ""
+                      }`}
                     style={
                       {
                         "--accent": palette.accent,
@@ -1227,9 +1244,8 @@ function App() {
                 return (
                   <button
                     key={source.id}
-                    className={`source-card ${
-                      selectedMcpSource === source.id ? "active" : ""
-                    }`}
+                    className={`source-card ${selectedMcpSource === source.id ? "active" : ""
+                      }`}
                     style={
                       {
                         "--accent": palette.accent,
@@ -1301,9 +1317,8 @@ function App() {
                   return (
                     <button
                       key={server.id}
-                      className={`mcp-card ${
-                        selectedMcpId === server.id ? "active" : ""
-                      }`}
+                      className={`mcp-card ${selectedMcpId === server.id ? "active" : ""
+                        }`}
                       style={
                         {
                           "--delay": `${index * 0.05}s`,
@@ -1410,6 +1425,36 @@ function App() {
                 </select>
               </label>
 
+              <label>
+                <span>{t("repoType")}</span>
+                <div className="toggle-group">
+                  <button
+                    className={`toggle-option ${skillForm.repoType === "public" ? "active" : ""
+                      }`}
+                    onClick={() =>
+                      setSkillForm((current) => ({
+                        ...current,
+                        repoType: "public",
+                      }))
+                    }
+                  >
+                    {t("public")}
+                  </button>
+                  <button
+                    className={`toggle-option ${skillForm.repoType === "private" ? "active" : ""
+                      }`}
+                    onClick={() =>
+                      setSkillForm((current) => ({
+                        ...current,
+                        repoType: "private",
+                      }))
+                    }
+                  >
+                    {t("private")}
+                  </button>
+                </div>
+              </label>
+
               <label className="full">
                 <span>{t("githubUrl")}</span>
                 <input
@@ -1423,6 +1468,23 @@ function App() {
                   placeholder={t("githubUrlPlaceholder")}
                 />
               </label>
+
+              {skillForm.repoType === "private" && (
+                <label className="full">
+                  <span>{t("token")}</span>
+                  <input
+                    type="password"
+                    value={skillForm.token}
+                    onChange={(event) =>
+                      setSkillForm((current) => ({
+                        ...current,
+                        token: event.target.value,
+                      }))
+                    }
+                    placeholder={t("tokenPlaceholder")}
+                  />
+                </label>
+              )}
             </div>
 
             <div className="modal-footer">

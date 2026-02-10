@@ -992,3 +992,39 @@ textarea {
     align-self: flex-start;
   }
 }
+
+.toggle-group {
+  display: flex;
+  gap: 4px;
+  background: #f0e7db;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  width: fit-content;
+}
+
+.toggle-option {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--muted);
+  font-family: var(--body-font);
+}
+
+.toggle-option.active {
+  background: #ffffff;
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(20, 16, 12, 0.08);
+  font-weight: 600;
+}
+
+.toggle-option:hover:not(.active) {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.5);
+}

@@ -1,14 +1,19 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use base64::Engine;
 use toml::map::Map as TomlMap;
 use toml::Value as TomlValue;
 use url::Url;
+
+thread_local! {
+    static TOKEN_OVERRIDE: RefCell<Option<String>> = RefCell::new(None);
+}
 
 #[derive(Clone)]
 struct SourceConfig {
@@ -115,6 +120,7 @@ struct GithubContentEntry {
 struct InstallSkillInput {
     source_id: String,
     url: String,
+    token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -297,10 +303,7 @@ fn mcp_source_configs(home: &Path) -> Vec<McpSourceConfig> {
     let claude_alt = home.join(".claude").join(".mcp.json");
     let claude_legacy = home.join(".claude").join("mcp.json");
     let codex_path = home.join(".codex").join("config.toml");
-    let opencode_path = home
-        .join(".config")
-        .join("opencode")
-        .join("opencode.json");
+    let opencode_path = home.join(".config").join("opencode").join("opencode.json");
     let roo_path = home.join(".roo").join("mcp.json");
     let copilot_path = home.join(".copilot").join("mcp.json");
     let cursor_path = home.join(".cursor").join("mcp.json");
@@ -536,7 +539,13 @@ fn load_skill(
         .get("description")
         .cloned()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| if is_markdown { extract_description(&body) } else { String::new() });
+        .unwrap_or_else(|| {
+            if is_markdown {
+                extract_description(&body)
+            } else {
+                String::new()
+            }
+        });
 
     let skill_md_path = skill_dir.join("SKILL.md");
     let last_modified = fs::metadata(skill_md_path)
@@ -592,8 +601,8 @@ fn read_skills(source: &SourceConfig) -> Vec<SkillItem> {
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest)
         .map_err(|err| format!("Failed to create {}: {}", dest.display(), err))?;
-    let entries = fs::read_dir(src)
-        .map_err(|err| format!("Failed to read {}: {}", src.display(), err))?;
+    let entries =
+        fs::read_dir(src).map_err(|err| format!("Failed to read {}: {}", src.display(), err))?;
 
     for entry in entries {
         let entry = entry.map_err(|err| format!("Failed to read entry: {}", err))?;
@@ -715,10 +724,7 @@ fn parse_skill_urls(input: &str, core_file: &str) -> Result<Vec<String>, String>
     }
 
     let parsed = Url::parse(trimmed).map_err(|_| "Invalid URL".to_string())?;
-    let host = parsed
-        .host_str()
-        .unwrap_or("")
-        .trim_start_matches("www.");
+    let host = parsed.host_str().unwrap_or("").trim_start_matches("www.");
     let segments: Vec<&str> = parsed
         .path()
         .split('/')
@@ -818,10 +824,7 @@ fn write_skill_source_url(skill_dir: &Path, url: &str) -> Result<(), String> {
 fn parse_github_location(input: &str) -> Result<GithubLocation, String> {
     let trimmed = input.trim();
     let parsed = Url::parse(trimmed).map_err(|_| "Invalid URL".to_string())?;
-    let host = parsed
-        .host_str()
-        .unwrap_or("")
-        .trim_start_matches("www.");
+    let host = parsed.host_str().unwrap_or("").trim_start_matches("www.");
     let segments: Vec<&str> = parsed
         .path()
         .split('/')
@@ -890,6 +893,12 @@ fn parse_github_location(input: &str) -> Result<GithubLocation, String> {
 }
 
 fn github_token() -> Option<String> {
+    let ui_token = TOKEN_OVERRIDE.with(|cell| cell.borrow().clone());
+    if let Some(token) = ui_token {
+        if !token.trim().is_empty() {
+            return Some(token);
+        }
+    }
     std::env::var("SKILL_GITHUB_TOKEN")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -906,9 +915,7 @@ fn github_token() -> Option<String> {
 }
 
 fn github_request(agent: &ureq::Agent, url: &str) -> ureq::Request {
-    let mut request = agent
-        .get(url)
-        .set("Accept", "application/vnd.github+json");
+    let mut request = agent.get(url).set("Accept", "application/vnd.github+json");
     if let Some(token) = github_token() {
         request = request.set("Authorization", &format!("Bearer {}", token));
     }
@@ -945,8 +952,8 @@ fn fetch_github_default_branch(
     let response = github_request(agent, &url)
         .call()
         .map_err(|err| format!("Failed to read GitHub repo info: {}", err))?;
-    let value = read_json_response(response)
-        .map_err(|err| format!("Invalid GitHub response: {}", err))?;
+    let value =
+        read_json_response(response).map_err(|err| format!("Invalid GitHub response: {}", err))?;
     value
         .get("default_branch")
         .and_then(|item| item.as_str())
@@ -959,8 +966,7 @@ fn github_branch_candidates(agent: &ureq::Agent, location: &GithubLocation) -> V
         return vec![branch.clone()];
     }
     let mut branches = Vec::new();
-    if let Ok(default_branch) =
-        fetch_github_default_branch(agent, &location.owner, &location.repo)
+    if let Ok(default_branch) = fetch_github_default_branch(agent, &location.owner, &location.repo)
     {
         branches.push(default_branch);
     }
@@ -986,14 +992,13 @@ fn fetch_github_contents(
     let response = github_request(agent, &url)
         .call()
         .map_err(|err| format!("Failed to read GitHub contents: {}", err))?;
-    let value = read_json_response(response)
-        .map_err(|err| format!("Invalid GitHub response: {}", err))?;
+    let value =
+        read_json_response(response).map_err(|err| format!("Invalid GitHub response: {}", err))?;
     match value {
         JsonValue::Array(items) => items
             .into_iter()
             .map(|item| {
-                serde_json::from_value(item)
-                    .map_err(|err| format!("Invalid GitHub entry: {}", err))
+                serde_json::from_value(item).map_err(|err| format!("Invalid GitHub entry: {}", err))
             })
             .collect(),
         JsonValue::Object(_) => {
@@ -1025,8 +1030,8 @@ fn fetch_github_blob_content(
     let response = github_request(agent, &url)
         .call()
         .map_err(|err| format!("Failed to read GitHub blob: {}", err))?;
-    let value = read_json_response(response)
-        .map_err(|err| format!("Invalid GitHub response: {}", err))?;
+    let value =
+        read_json_response(response).map_err(|err| format!("Invalid GitHub response: {}", err))?;
     let obj = value
         .as_object()
         .ok_or_else(|| "Invalid GitHub blob response".to_string())?;
@@ -1055,8 +1060,8 @@ fn fetch_github_file_content(
     let response = github_request(agent, &url)
         .call()
         .map_err(|err| format!("Failed to read GitHub file: {}", err))?;
-    let value = read_json_response(response)
-        .map_err(|err| format!("Invalid GitHub response: {}", err))?;
+    let value =
+        read_json_response(response).map_err(|err| format!("Invalid GitHub response: {}", err))?;
     let obj = value
         .as_object()
         .ok_or_else(|| "Invalid GitHub file response".to_string())?;
@@ -1171,9 +1176,7 @@ fn fallback_name_from_url(input: &str, core_file: &str) -> String {
 }
 
 fn fetch_skill_content(urls: Vec<String>) -> Result<String, String> {
-    let agent = ureq::AgentBuilder::new()
-        .user_agent("Ananke/0.1")
-        .build();
+    let agent = ureq::AgentBuilder::new().user_agent("Ananke/0.1").build();
     let mut last_error = None;
 
     for url in urls {
@@ -1227,23 +1230,16 @@ fn load_toml_value(path: &Path) -> Result<TomlValue, String> {
     if content.trim().is_empty() {
         return Ok(TomlValue::Table(TomlMap::new()));
     }
-    content
-        .parse::<TomlValue>()
-        .map_err(|err| {
-            let location = err
-                .span()
-                .map(|span| {
-                    let (line, col) = line_col_from_index(&content, span.start);
-                    format!("line {}, column {}", line, col)
-                })
-                .unwrap_or_else(|| "unknown location".to_string());
-            format!(
-                "Invalid TOML in {} ({}): {}",
-                path.display(),
-                location,
-                err
-            )
-        })
+    content.parse::<TomlValue>().map_err(|err| {
+        let location = err
+            .span()
+            .map(|span| {
+                let (line, col) = line_col_from_index(&content, span.start);
+                format!("line {}, column {}", line, col)
+            })
+            .unwrap_or_else(|| "unknown location".to_string());
+        format!("Invalid TOML in {} ({}): {}", path.display(), location, err)
+    })
 }
 
 fn save_toml_value(path: &Path, value: &TomlValue) -> Result<(), String> {
@@ -1253,8 +1249,7 @@ fn save_toml_value(path: &Path, value: &TomlValue) -> Result<(), String> {
     }
     let content = toml::to_string_pretty(value)
         .map_err(|err| format!("Failed to serialize TOML: {}", err))?;
-    fs::write(path, content)
-        .map_err(|err| format!("Failed to write {}: {}", path.display(), err))
+    fs::write(path, content).map_err(|err| format!("Failed to write {}: {}", path.display(), err))
 }
 
 fn load_json_value(path: &Path) -> Result<JsonValue, String> {
@@ -1292,14 +1287,12 @@ fn toml_to_json(value: &TomlValue) -> JsonValue {
     match value {
         TomlValue::String(value) => JsonValue::String(value.clone()),
         TomlValue::Integer(value) => JsonValue::Number((*value).into()),
-        TomlValue::Float(value) => JsonValue::Number(
-            serde_json::Number::from_f64(*value).unwrap_or_else(|| 0.into()),
-        ),
+        TomlValue::Float(value) => {
+            JsonValue::Number(serde_json::Number::from_f64(*value).unwrap_or_else(|| 0.into()))
+        }
         TomlValue::Boolean(value) => JsonValue::Bool(*value),
         TomlValue::Datetime(value) => JsonValue::String(value.to_string()),
-        TomlValue::Array(values) => {
-            JsonValue::Array(values.iter().map(toml_to_json).collect())
-        }
+        TomlValue::Array(values) => JsonValue::Array(values.iter().map(toml_to_json).collect()),
         TomlValue::Table(table) => {
             let mut map = JsonMap::new();
             for (key, value) in table {
@@ -1342,8 +1335,8 @@ fn json_to_toml(value: &JsonValue) -> Result<TomlValue, String> {
 }
 
 fn parse_mcp_json(input: &str) -> Result<HashMap<String, JsonValue>, String> {
-    let value: JsonValue = serde_json::from_str(input)
-        .map_err(|err| format!("Invalid MCP JSON: {}", err))?;
+    let value: JsonValue =
+        serde_json::from_str(input).map_err(|err| format!("Invalid MCP JSON: {}", err))?;
     let servers = value
         .get("mcpServers")
         .and_then(|item| item.as_object())
@@ -1375,7 +1368,10 @@ fn opencode_to_standard_config(config: &JsonValue) -> JsonValue {
                     let args: Vec<JsonValue> = items
                         .iter()
                         .skip(1)
-                        .filter_map(|item| item.as_str().map(|value| JsonValue::String(value.to_string())))
+                        .filter_map(|item| {
+                            item.as_str()
+                                .map(|value| JsonValue::String(value.to_string()))
+                        })
                         .collect();
                     if !args.is_empty() {
                         out.insert("args".to_string(), JsonValue::Array(args));
@@ -1737,10 +1733,10 @@ fn list_skill_tree(payload: SkillTreeInput) -> Result<SkillTreeNode, String> {
         return Err("Skill not found".to_string());
     }
 
-    let root_canon = fs::canonicalize(&source.root)
-        .map_err(|err| format!("Failed to resolve root: {}", err))?;
-    let skill_canon = fs::canonicalize(&skill_dir)
-        .map_err(|err| format!("Failed to resolve skill: {}", err))?;
+    let root_canon =
+        fs::canonicalize(&source.root).map_err(|err| format!("Failed to resolve root: {}", err))?;
+    let skill_canon =
+        fs::canonicalize(&skill_dir).map_err(|err| format!("Failed to resolve skill: {}", err))?;
     if !skill_canon.starts_with(&root_canon) {
         return Err("Refusing to read outside agent root".to_string());
     }
@@ -1750,6 +1746,16 @@ fn list_skill_tree(payload: SkillTreeInput) -> Result<SkillTreeNode, String> {
 
 #[tauri::command]
 fn install_skill_from_url(payload: InstallSkillInput) -> Result<SkillItem, String> {
+    if let Some(token) = &payload.token {
+        TOKEN_OVERRIDE.with(|cell| *cell.borrow_mut() = Some(token.clone()));
+    }
+    struct TokenGuard;
+    impl Drop for TokenGuard {
+        fn drop(&mut self) {
+            TOKEN_OVERRIDE.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+    let _guard = TokenGuard;
     let home = resolve_home()?;
     let sources = source_configs(&home);
     let source = sources
@@ -1774,9 +1780,11 @@ fn install_skill_from_url(payload: InstallSkillInput) -> Result<SkillItem, Strin
     let mut selected_branch = None;
 
     'core_lookup: for file_name in &source.core_files {
-        if let (Some(location), Some(agent), Some(branches)) =
-            (github_location.as_ref(), github_agent.as_ref(), github_branches.as_ref())
-        {
+        if let (Some(location), Some(agent), Some(branches)) = (
+            github_location.as_ref(),
+            github_agent.as_ref(),
+            github_branches.as_ref(),
+        ) {
             for branch in branches {
                 let path = github_file_path(location, file_name);
                 match fetch_github_file_content(
@@ -1794,8 +1802,7 @@ fn install_skill_from_url(payload: InstallSkillInput) -> Result<SkillItem, Strin
                             break 'core_lookup;
                         }
                         Err(err) => {
-                            last_error =
-                                Some(format!("GitHub file is not UTF-8: {}", err));
+                            last_error = Some(format!("GitHub file is not UTF-8: {}", err));
                         }
                     },
                     Err(err) => {
@@ -1818,9 +1825,8 @@ fn install_skill_from_url(payload: InstallSkillInput) -> Result<SkillItem, Strin
         }
     }
 
-    let content = content.ok_or_else(|| {
-        last_error.unwrap_or_else(|| "Unable to download skill file".to_string())
-    })?;
+    let content = content
+        .ok_or_else(|| last_error.unwrap_or_else(|| "Unable to download skill file".to_string()))?;
     let core_file_name = core_file_name.ok_or_else(|| "Missing core file".to_string())?;
     let is_markdown = core_file_name.ends_with(".md");
     let (metadata, _) = if is_markdown {
@@ -1899,10 +1905,10 @@ fn sync_skill_from_url(payload: SyncSkillInput) -> Result<SkillItem, String> {
         return Err("Skill not found".to_string());
     }
 
-    let root_canon = fs::canonicalize(&source.root)
-        .map_err(|err| format!("Failed to resolve root: {}", err))?;
-    let skill_canon = fs::canonicalize(&skill_dir)
-        .map_err(|err| format!("Failed to resolve skill: {}", err))?;
+    let root_canon =
+        fs::canonicalize(&source.root).map_err(|err| format!("Failed to resolve root: {}", err))?;
+    let skill_canon =
+        fs::canonicalize(&skill_dir).map_err(|err| format!("Failed to resolve skill: {}", err))?;
     if !skill_canon.starts_with(&root_canon) {
         return Err("Refusing to sync outside agent root".to_string());
     }
@@ -1911,9 +1917,7 @@ fn sync_skill_from_url(payload: SyncSkillInput) -> Result<SkillItem, String> {
         .ok_or_else(|| "Missing core file".to_string())?;
 
     if let Ok(location) = parse_github_location(&payload.url) {
-        let agent = ureq::AgentBuilder::new()
-            .user_agent("Ananke/0.1")
-            .build();
+        let agent = ureq::AgentBuilder::new().user_agent("Ananke/0.1").build();
         let mut branches = github_branch_candidates(&agent, &location);
         let mut last_download_error = None;
         let mut confirmed_branch = None;
@@ -1934,17 +1938,12 @@ fn sync_skill_from_url(payload: SyncSkillInput) -> Result<SkillItem, String> {
         }
         let branch = confirmed_branch.unwrap_or_else(|| branches.remove(0));
         let path = github_file_path(&location, &core_file_name);
-        let content = fetch_github_file_content(
-            &agent,
-            &location.owner,
-            &location.repo,
-            &path,
-            &branch,
-        )
-        .and_then(|bytes| {
-            String::from_utf8(bytes)
-                .map_err(|err| format!("GitHub file is not UTF-8: {}", err))
-        })?;
+        let content =
+            fetch_github_file_content(&agent, &location.owner, &location.repo, &path, &branch)
+                .and_then(|bytes| {
+                    String::from_utf8(bytes)
+                        .map_err(|err| format!("GitHub file is not UTF-8: {}", err))
+                })?;
         write_skill_source_url(&skill_dir, &payload.url)?;
         fs::write(&core_file_path, content)
             .map_err(|err| format!("Failed to write {}: {}", core_file_name, err))?;
@@ -1973,17 +1972,16 @@ fn delete_skill(payload: DeleteSkillInput) -> Result<(), String> {
         return Err("Skill not found".to_string());
     }
 
-    let root_canon = fs::canonicalize(&source.root)
-        .map_err(|err| format!("Failed to resolve root: {}", err))?;
-    let skill_canon = fs::canonicalize(&skill_dir)
-        .map_err(|err| format!("Failed to resolve skill: {}", err))?;
+    let root_canon =
+        fs::canonicalize(&source.root).map_err(|err| format!("Failed to resolve root: {}", err))?;
+    let skill_canon =
+        fs::canonicalize(&skill_dir).map_err(|err| format!("Failed to resolve skill: {}", err))?;
 
     if !skill_canon.starts_with(&root_canon) {
         return Err("Refusing to delete outside agent root".to_string());
     }
 
-    fs::remove_dir_all(&skill_dir)
-        .map_err(|err| format!("Failed to delete skill: {}", err))?;
+    fs::remove_dir_all(&skill_dir).map_err(|err| format!("Failed to delete skill: {}", err))?;
     Ok(())
 }
 
@@ -2042,11 +2040,8 @@ fn list_mcp_sources() -> Result<Vec<McpSource>, String> {
     let mut response = Vec::new();
 
     for config in configs {
-        let has_config = config
-            .read_paths
-            .iter()
-            .any(|path| path.exists())
-            || config.primary_path.exists();
+        let has_config =
+            config.read_paths.iter().any(|path| path.exists()) || config.primary_path.exists();
         if !config.install_root.is_dir() && !has_config {
             continue;
         }

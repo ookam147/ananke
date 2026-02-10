@@ -143,6 +143,7 @@ struct SyncSkillInput {
     source_id: String,
     skill_id: String,
     url: String,
+    token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1893,6 +1894,17 @@ fn install_skill_from_url(payload: InstallSkillInput) -> Result<SkillItem, Strin
 
 #[tauri::command]
 fn sync_skill_from_url(payload: SyncSkillInput) -> Result<SkillItem, String> {
+    if let Some(token) = &payload.token {
+        TOKEN_OVERRIDE.with(|cell| *cell.borrow_mut() = Some(token.clone()));
+    }
+    struct TokenGuard;
+    impl Drop for TokenGuard {
+        fn drop(&mut self) {
+            TOKEN_OVERRIDE.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+    let _guard = TokenGuard;
+
     let home = resolve_home()?;
     let sources = source_configs(&home);
     let source = sources

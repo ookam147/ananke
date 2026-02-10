@@ -186,6 +186,11 @@ const translations = {
     language: "Language",
     english: "English",
     chinese: "中文",
+    syncTokenTitle: "GitHub Token Required",
+    syncTokenHint: "Private repositories require a token to sync.",
+    syncTokenPlaceholder: "ghp_...",
+    retrySync: "Retry Sync",
+    cancelSync: "Cancel",
   },
   zh: {
     tagline: "Skill 与 MCP 的可视化管理",
@@ -297,6 +302,11 @@ const translations = {
     language: "语言",
     english: "English",
     chinese: "中文",
+    syncTokenTitle: "需要 GitHub Token",
+    syncTokenHint: "同步私有仓库需要通过 Token 验证。",
+    syncTokenPlaceholder: "ghp_...",
+    retrySync: "重试同步",
+    cancelSync: "取消",
   },
 } as const;
 
@@ -420,6 +430,10 @@ function App() {
   const [syncMcpTargetId, setSyncMcpTargetId] = useState("");
   const [syncMcpSourceId, setSyncMcpSourceId] = useState("");
   const [syncMcpLoading, setSyncMcpLoading] = useState(false);
+
+  const [showSyncTokenInput, setShowSyncTokenInput] = useState(false);
+  const [syncToken, setSyncToken] = useState("");
+
   const [locale, setLocale] = useState<Locale>(() => resolveLocale());
 
   useEffect(() => {
@@ -671,6 +685,7 @@ function App() {
   const handleSyncSkill = async () => {
     if (!selectedSkill?.sourceUrl || syncLoading) return;
     const skillKey = `${selectedSkill.sourceId}:${selectedSkill.id}`;
+    // Try without token first
     try {
       setSyncLoading(true);
       await invoke<Skill>("sync_skill_from_url", {
@@ -684,7 +699,45 @@ function App() {
       setSelectedSkillKey(skillKey);
       showToast(t("skillSynced"), "success");
     } catch (err) {
+      const errorMsg = String(err);
+      if (
+        errorMsg.includes("404") ||
+        errorMsg.includes("403") ||
+        errorMsg.includes("401") ||
+        errorMsg.includes("Not Found")
+      ) {
+        // Likely a private repo auth issue
+        setSyncToken("");
+        setShowSyncTokenInput(true);
+      } else {
+        showToast(t("syncFailed", { error: errorMsg }), "error");
+      }
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const handleSyncWithToken = async () => {
+    if (!selectedSkill?.sourceUrl || !syncToken.trim()) return;
+    const skillKey = `${selectedSkill.sourceId}:${selectedSkill.id}`;
+
+    try {
+      setSyncLoading(true);
+      setShowSyncTokenInput(false); // Close modal first
+      await invoke<Skill>("sync_skill_from_url", {
+        payload: {
+          sourceId: selectedSkill.sourceId,
+          skillId: selectedSkill.id,
+          url: selectedSkill.sourceUrl,
+          token: syncToken.trim(),
+        },
+      });
+      await loadSources();
+      setSelectedSkillKey(skillKey);
+      showToast(t("skillSynced"), "success");
+    } catch (err) {
       showToast(t("syncFailed", { error: String(err) }), "error");
+      // Optionally reopen modal on failure? For now just show toast.
     } finally {
       setSyncLoading(false);
     }
@@ -1741,6 +1794,80 @@ function App() {
           </svg>
         </button>
       </footer>
+
+      {showSyncTokenInput && (
+        <div className="overlay" role="dialog" aria-modal="true">
+          <div className="modal" style={{ width: "400px" }}>
+            <div className="modal-header">
+              <div>
+                <h3>{t("syncTokenTitle")}</h3>
+                <p>{t("syncTokenHint")}</p>
+              </div>
+            </div>
+
+            <div className="modal-grid">
+              <label className="full">
+                <span>{t("token")}</span>
+                <input
+                  type="password"
+                  value={syncToken}
+                  onChange={(e) => setSyncToken(e.target.value)}
+                  placeholder={t("syncTokenPlaceholder")}
+                />
+              </label>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowSyncTokenInput(false)}
+              >
+                {t("cancelSync")}
+              </button>
+              <button className="btn btn-primary" onClick={handleSyncWithToken}>
+                {t("retrySync")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSyncTokenInput && (
+        <div className="overlay" role="dialog" aria-modal="true">
+          <div className="modal" style={{ width: "400px" }}>
+            <div className="modal-header">
+              <div>
+                <h3>{t("syncTokenTitle")}</h3>
+                <p>{t("syncTokenHint")}</p>
+              </div>
+            </div>
+
+            <div className="modal-grid">
+              <label className="full">
+                <span>{t("token")}</span>
+                <input
+                  type="password"
+                  value={syncToken}
+                  onChange={(e) => setSyncToken(e.target.value)}
+                  placeholder={t("syncTokenPlaceholder")}
+                />
+              </label>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowSyncTokenInput(false)}
+              >
+                {t("cancelSync")}
+              </button>
+              <button className="btn btn-primary" onClick={handleSyncWithToken}>
+                {t("retrySync")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className={`toast ${toast.tone}`} role="status">
